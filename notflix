@@ -70,4 +70,4 @@ PEERFLIX_FLAGS="-l --mpv -- --fs"
 
 test -t 0 && \
   peerflix "$magnet" $PEERFLIX_FLAGS || \
-  x-terminal-emulator -e peerflix "$magnet" $PEERFLIX_FLAGS
+  x-terminal-emulator -e bash -i -c "peerflix \"$magnet\" $PEERFLIX_FLAGS"
