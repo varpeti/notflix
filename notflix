@@ -1,6 +1,9 @@
 #!/bin/sh
 
-# Dependencies - peerflix, mpv
+# Dependencies:
+#   - peerflix
+#   - mpv
+#   - https://github.com/Mathieu-COSYNS/dmenu
 
 menu="dmenu -i -l 20"
 baseurl="https://1337x.wtf"
@@ -13,61 +16,98 @@ seedleechfile="$cachedir/seedleech.txt"
 sizesfile="$cachedir/sizes.txt"
 linksfile="$cachedir/links.txt"
 
-query=`(test -z "$@" && $menu -p "Search Torrent: " <&- || echo "$@") | sed 's/ /+/g'`
+read_query() {
+  QUERY=`$menu -p "Search Torrent: " -it "$QUERY" <&-`
 
-# Canceled
-test -z "$query" && exit 0
+  # Canceled
+  test -z "$QUERY" && return 1
+
+  echo "Searching for: $QUERY"
+
+  return 0
+}
+
+get_torrents_list() {
+  # Download search results
+  curl -s "$baseurl/search/$(echo $QUERY | sed 's/ /+/g')/1/" > "$searchhtmlfile"
+
+  # Get Titles
+  grep -o '<a href="/torrent/.*</a>' "$searchhtmlfile" |
+    sed 's/<[^>]*>//g' |
+    sed 's/\./ /g; s/\-/ /g' |
+    sed 's/[^A-Za-z0-9 ]//g' |
+    tr -s " " > "$titlefile"
+
+  result_count=$(wc -l "$titlefile" | awk '{print $1}')
+  if [ "$result_count" -lt 1 ]; then
+    notify-send "😔 No Result found. Try again 🔴"
+    return 1
+  fi
+
+  # Seeders and Leechers
+  grep -o '<td class="coll-2 seeds.*</td>\|<td class="coll-3 leeches.*</td>' "$searchhtmlfile" |
+    sed 's/<[^>]*>//g' |
+    sed 'N;s/\n/ /' |
+    awk '{print "[S:"$1 ", L:"$2"]" }' > "$seedleechfile"
+
+  # Size
+  grep -o '<td class="coll-4 size.*</td>' "$searchhtmlfile" |
+    sed 's/<span class="seeds">.*<\/span>//g' |
+    sed -e 's/<[^>]*>//g' > "$sizesfile"
+
+  # Links
+  grep -Eo "/torrent\/[0-9]{7}\/[a-zA-Z0-9?%-]*/" "$searchhtmlfile" > "$linksfile"
+
+  return 0
+}
+
+select_torrent_url() {
+  # Getting the line number
+  LINE=$(expr "$(paste -d '@' "$sizesfile" "$seedleechfile" "$titlefile" |
+    sed 's/@/ - /g' |
+    $menu -r -ix)")
+
+  if [ -z "$LINE" ]; then
+    return 1
+  fi
+
+  LINE=$(echo "$LINE + 1" | bc)
+
+  movieurl="${baseurl}$(head -n $LINE "$linksfile" | tail -n +$LINE)"
+
+  return 0
+}
+
+get_magnet_from_movieurl() {
+  echo "Reading $movieurl"
+  magnet=$(curl -s "$movieurl" | grep -Po "magnet:\?xt=urn:btih:[a-zA-Z0-9]*" | head -n 1)
+}
+
+open_magnet_link() {
+  if [ -z "$magnet" ]; then
+    notify-send "🧲 Magnet not found!"
+    return 1
+  fi
+
+  notify-send "🧲 Magnet found! Loading..."
+
+  PEERFLIX_FLAGS="-l --mpv -- --fs"
+
+  if [ -t 0 ]; then
+    peerflix "$magnet" $PEERFLIX_FLAGS
+  else
+    x-terminal-emulator -T Notflix -e bash -i -c "peerflix \"$magnet\" $PEERFLIX_FLAGS"
+  fi
+
+  return 0
+}
+
+# Read args
+QUERY="$@"
 
 mkdir -p "$cachedir"
 
-# Download search results
-curl -s "$baseurl/search/$query/1/" > "$searchhtmlfile"
-
-# Get Titles
-grep -o '<a href="/torrent/.*</a>' "$searchhtmlfile" |
-  sed 's/<[^>]*>//g' |
-  sed 's/\./ /g; s/\-/ /g' |
-  sed 's/[^A-Za-z0-9 ]//g' |
-  tr -s " " > "$titlefile"
-
-result_count=$(wc -l "$titlefile" | awk '{print $1}')
-if [ "$result_count" -lt 1 ]; then
-  notify-send "😔 No Result found. Try again 🔴"
-  exit 0
-fi
-
-# Seeders and Leechers
-grep -o '<td class="coll-2 seeds.*</td>\|<td class="coll-3 leeches.*</td>' "$searchhtmlfile" |
-  sed 's/<[^>]*>//g' |
-  sed 'N;s/\n/ /' |
-  awk '{print "[S:"$1 ", L:"$2"]" }' > "$seedleechfile"
-
-# Size
-grep -o '<td class="coll-4 size.*</td>' "$searchhtmlfile" |
-  sed 's/<span class="seeds">.*<\/span>//g' |
-  sed -e 's/<[^>]*>//g' > "$sizesfile"
-
-# Links
-grep -Eo "/torrent\/[0-9]{7}\/[a-zA-Z0-9?%-]*/" "$searchhtmlfile" > "$linksfile"
-
-# Getting the line number
-LINE=$(expr "$(paste -d '@' "$sizesfile" "$seedleechfile" "$titlefile" |
-  sed 's/@/ - /g' |
-  $menu -r -ix) + 1" | bc)
-
-movieurl="${baseurl}$(head -n $LINE "$linksfile" | tail -n +$LINE)"
-echo $movieurl
-magnet=$(curl -s "$movieurl" | grep -Po "magnet:\?xt=urn:btih:[a-zA-Z0-9]*" | head -n 1)
-
-if [ -z "$magnet" ]; then
-  notify-send "🧲 Magnet not found!"
-  exit 1
-fi
-
-notify-send "🧲 Magnet found! Loading..."
-
-PEERFLIX_FLAGS="-l --mpv -- --fs"
-
-test -t 0 && \
-  peerflix "$magnet" $PEERFLIX_FLAGS || \
-  x-terminal-emulator -T Notflix -e bash -i -c "peerflix \"$magnet\" $PEERFLIX_FLAGS"
+while :; do
+  read_query || exit 0
+  get_torrents_list && select_torrent_url && get_magnet_from_movieurl && open_magnet_link && exit 0
+done
