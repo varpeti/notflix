@@ -1,12 +1,10 @@
 #!/bin/sh
 
 # Dependencies:
-#   - peerflix
 #   - mpv
-#   - https://github.com/Mathieu-COSYNS/dmenu
+#   - btfs (btplay)
 
-menu="dmenu -i -l 20"
-baseurl="https://1337x.wtf"
+baseurl="https://1337x.to"
 
 cachedir="$HOME/.cache/notflix"
 searchhtmlfile="$cachedir/search.html"
@@ -14,10 +12,15 @@ detailshtmlfile="$cachedir/details.html"
 titlefile="$cachedir/titles.txt"
 seedleechfile="$cachedir/seedleech.txt"
 sizesfile="$cachedir/sizes.txt"
+sizefilewlinenums="$cachedir/sizewlinenums.txt"
 linksfile="$cachedir/links.txt"
 
 read_query() {
-  QUERY=`$menu -p "Search Torrent: " -it "$QUERY" <&-`
+	# Argument given
+	test -z "$QUERY" || return 0
+
+  echo "Search Torrent: "
+  read QUERY
 
   # Canceled
   test -z "$QUERY" && return 1
@@ -40,7 +43,7 @@ get_torrents_list() {
 
   result_count=$(wc -l "$titlefile" | awk '{print $1}')
   if [ "$result_count" -lt 1 ]; then
-    notify-send "😔 No Result found. Try again 🔴"
+    echo "😔 No Result found. Try again 🔴"
     return 1
   fi
 
@@ -55,23 +58,23 @@ get_torrents_list() {
     sed 's/<span class="seeds">.*<\/span>//g' |
     sed -e 's/<[^>]*>//g' > "$sizesfile"
 
+  # Line numbers
+  nl -w1 -s": " $sizesfile >$sizefilewlinenums
+
   # Links
-  grep -Eo "/torrent\/[0-9]{7}\/[a-zA-Z0-9?%-]*/" "$searchhtmlfile" > "$linksfile"
+  grep -Eo "/torrent\/[0-9]{7}\/[a-zA-Z0-9?%-]*/" "$searchhtmlfile" > "$linksfile" 2>/dev/null
 
   return 0
 }
 
 select_torrent_url() {
   # Getting the line number
-  LINE=$(expr "$(paste -d '@' "$sizesfile" "$seedleechfile" "$titlefile" |
-    sed 's/@/ - /g' |
-    $menu -r -ix)")
+  paste -d '@' "$sizefilewlinenums" "$seedleechfile" "$titlefile" | sed 's/@/ - /g'
+  read LINE
 
   if [ -z "$LINE" ]; then
     return 1
   fi
-
-  LINE=$(echo "$LINE + 1" | bc)
 
   movieurl="${baseurl}$(head -n $LINE "$linksfile" | tail -n +$LINE)"
 
@@ -85,18 +88,19 @@ get_magnet_from_movieurl() {
 
 open_magnet_link() {
   if [ -z "$magnet" ]; then
-    notify-send "🧲 Magnet not found!"
+  	echo "🧲 Magnet not found!"
+    echo "🧲 Magnet not found!"
     return 1
   fi
 
-  notify-send "🧲 Magnet found! Loading..."
+  echo "🧲 Magnet found! Loading..."
 
-  PEERFLIX_FLAGS="-l --mpv -- --fs"
+  BTPLAY_FLAGS="-p mpv"
 
   if [ -t 0 ]; then
-    peerflix "$magnet" $PEERFLIX_FLAGS
+    btplay $BTPLAY_FLAGS "$magnet"
   else
-    x-terminal-emulator -T Notflix -e bash -i -c "peerflix \"$magnet\" $PEERFLIX_FLAGS"
+    x-terminal-emulator -T Notflix -e bash -i -c "btplay $BTPLAY_FLAGS \"$magnet\""
   fi
 
   return 0
@@ -111,3 +115,4 @@ while :; do
   read_query || exit 0
   get_torrents_list && select_torrent_url && get_magnet_from_movieurl && open_magnet_link && exit 0
 done
+
